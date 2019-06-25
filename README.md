@@ -1,5 +1,5 @@
-#阿里云K8S私有Ingress Controller的配置和使用
-##创建集群
+# 阿里云K8S私有Ingress Controller的配置和使用
+## 创建集群
 进入阿里云容器服务控制台，创建一个新的k8s集群，此时集群会自动生成一个公网的Ingress Controller和一个公网的SLB监听着Worker的80和443端口。
 
 **默认的公网Ingress Controller**
@@ -7,11 +7,11 @@
 
 **默认的公网SLB**（SLB名字是自己起的，为了方便看）
 ![](http://ww1.sinaimg.cn/large/006tNc79gy1g4dshqd4cuj31ma0jawhn.jpg)
-##创建私有SLB
+## 创建私有SLB
 进入负载均衡控制台创建一个私有SLB，实例规格按实际业务需求。**注意：专有网络必须和刚才创建的集群的一样！！！**
 
 ![](http://ww1.sinaimg.cn/large/006tNc79gy1g4dt4trda1j312w0u0gt4.jpg)
-##配置私有Ingress Controller
+## 配置私有Ingress Controller
 由于Ingress Controller Pods中的serviceAccountName是引用集群默认创建的，所以在此就不再配置ServiceAccount、ClusterRole和ClusterRoleBinding。
 
 1. Nginx ConfigMap
@@ -205,20 +205,20 @@
 		    # select app=private-ingress-nginx pods
 		    app: private-ingress-nginx
 
-##部署私有Ingress Controller
+## 部署私有Ingress Controller
 	kubectl apply -f private-ingress-controller.yml
 1. Private Ingress Pod
 ![](http://ww2.sinaimg.cn/large/006tNc79gy1g4dukry438j31eo0m4q6n.jpg)
 2. Private Ingress LB Service
 ![](http://ww2.sinaimg.cn/large/006tNc79gy1g4dunh5yj1j31l60o6wiw.jpg)
 
-##更新Clusterrole:nginx-ingress-controller
+## 更新Clusterrole:nginx-ingress-controller
 由于在配置私有Ingress Controller Pod时是引用集群默认的ServiceAccount，新生成的**ingress-controller-leader-private**配置项没有更新到默认的ClusterRole所以导致Service启动时会报没权限，此时我们需要在默认的ClusterRole中的resourceNames下添加**ingress-controller-leader-private**。
 	
 	kubectl edit clusterrole nginx-ingress-controller -o yaml
 ![](http://ww4.sinaimg.cn/large/006tNc79gy1g4duz5p2fjj30vu0gkmz5.jpg)
 
-##使用阿里云DNS PrivateZone绑定SLB IP
+## 使用阿里云DNS PrivateZone绑定SLB IP
 1. 进入云解析DNS控制台，开通PrivateZone并添加域名。
 ![](http://ww3.sinaimg.cn/large/006tNc79gy1g4dv6598y6j328m0ni436.jpg)
 2. 关联vpc
@@ -226,7 +226,7 @@
 3. 添加域名解析，绑定私有SLB IP
 ![](http://ww1.sinaimg.cn/large/006tNc79gy1g4dv9wz6uhj318g0mc40g.jpg)
 
-##部署测试服务
+## 部署测试服务
 	apiVersion: apps/v1beta2
 	kind: Deployment
 	metadata:
@@ -328,7 +328,7 @@
 	  sessionAffinity: None
 	  type: ClusterIP
 	  
-##测试结果
+## 测试结果
 在同一个VPC下的ECS访问集群服务结果如下
 ![](http://ww3.sinaimg.cn/large/006tNc79gy1g4dvkndhz5j31em06mgme.jpg)
 
