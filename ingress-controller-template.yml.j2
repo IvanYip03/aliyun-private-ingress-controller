@@ -1,0 +1,279 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx-ingress-controller
+  namespace: {{Namespace}}
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRole
+metadata:
+  name: nginx-ingress-controller
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - endpoints
+      - nodes
+      - pods
+      - secrets
+      - namespaces
+      - services
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - "extensions"
+    resources:
+      - ingresses
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  - apiGroups:
+      - "extensions"
+    resources:
+      - ingresses/status
+    verbs:
+      - update
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - create
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+    {% if IngressClass -%}
+      - "ingress-controller-leader-{{IngressClass}}"
+    {% endif -%}
+      - "ingress-controller-leader-nginx"
+    verbs:
+      - get
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1beta1
+kind: ClusterRoleBinding
+metadata:
+  name: nginx-ingress-controller-{{Namespace}}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nginx-ingress-controller
+subjects:
+- kind: ServiceAccount
+  name: nginx-ingress-controller
+  namespace: {{Namespace}}
+---
+# nginx ingress service
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-ingress-lb
+  namespace: {{Namespace}}
+  labels:
+    app: nginx-ingress-lb
+  annotations:
+    {% if LoadbalancerID -%}
+    # set loadbalancer to the specified slb id
+    service.beta.kubernetes.io/alicloud-loadbalancer-id: {{LoadbalancerID}}
+    {% endif -%}
+    # set loadbalancer address type to intranet if using private slb instance
+    #service.beta.kubernetes.io/alicloud-loadbalancer-address-type: intranet
+    service.beta.kubernetes.io/alicloud-loadbalancer-force-override-listeners: 'true'
+spec:
+  type: LoadBalancer
+  # do not route traffic to other nodes
+  # and reserve client ip for upstream
+  externalTrafficPolicy: "Local"
+  ports:
+  - port: 80
+    name: http
+    targetPort: 80
+  - port: 443
+    name: https
+    targetPort: 443
+  selector:
+    # select app=ingress-nginx pods
+    app: ingress-nginx
+---
+# nginx config map
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-configuration
+  namespace: {{Namespace}}
+  labels:
+    app: ingress-nginx
+data:
+    proxy-body-size: 20m
+    proxy-connect-timeout: "10"
+    max-worker-connections: "65536"
+    enable-underscores-in-headers: "true"
+    reuse-port: "true"
+    worker-cpu-affinity: "auto"
+    server-tokens: "false"
+    ssl-redirect: "false"
+    allow-backend-server-header: "true"
+    ignore-invalid-headers: "true"
+    generate-request-id: "true"
+    #forwarded-for-header: "X-Real-IP"
+    #compute-full-forwarded-for: "true"
+    #hsts: "false"
+    #enable-vts-status: "true"
+    #use-proxy-protocol: "true"
+---
+# nginx tcp stream config map
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: tcp-services
+  namespace: {{Namespace}}
+---
+# nginx udp stream config map
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: udp-services
+  namespace: {{Namespace}}
+---
+# nginx ingress pods
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-ingress-controller
+  labels:
+    app: ingress-nginx
+  namespace: {{Namespace}}
+  annotations:
+    component.version: '0.22.0'
+    component.revision: '5'
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ingress-nginx
+  template:
+    metadata:
+      labels:
+        app: ingress-nginx
+      annotations:
+        scheduler.alpha.kubernetes.io/critical-pod: ''
+      annotations:
+        prometheus.io/port: "10254"
+        prometheus.io/scrape: "true"
+    spec:
+      #tolerations:
+      #  - key: node-role.kubernetes.io/master
+      #    effect: NoSchedule
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - ingress-nginx
+              topologyKey: "kubernetes.io/hostname"
+      serviceAccountName: nginx-ingress-controller
+      initContainers:
+      - name: init-sysctl
+        image: registry.cn-hangzhou.aliyuncs.com/acs/busybox:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          sysctl -w net.core.somaxconn=65535
+          sysctl -w net.ipv4.ip_local_port_range="1024 65535"
+          sysctl -w fs.file-max=1048576
+          sysctl -w fs.inotify.max_user_instances=16384
+          sysctl -w fs.inotify.max_user_watches=524288
+          sysctl -w fs.inotify.max_queued_events=16384
+        securityContext:
+          privileged: true
+      containers:
+      - name: nginx-ingress-controller
+        {% if ImageVersion -%}
+        image: registry.cn-hangzhou.aliyuncs.com/acs/aliyun-ingress-controller:{{ImageVersion}}
+        {% else -%}
+        image: registry.cn-hangzhou.aliyuncs.com/acs/aliyun-ingress-controller:v0.22.0.5-552e0db-aliyun
+        {% endif -%}
+        args:
+          - /nginx-ingress-controller
+          - --configmap=$(POD_NAMESPACE)/nginx-configuration
+          - --tcp-services-configmap=$(POD_NAMESPACE)/tcp-services
+          - --udp-services-configmap=$(POD_NAMESPACE)/udp-services
+          - --annotations-prefix=nginx.ingress.kubernetes.io
+          - --publish-service=$(POD_NAMESPACE)/nginx-ingress-lb
+          {% if IngressClass -%}
+          - --ingress-class={{IngressClass}}
+          {% endif -%}
+          {% if WatchNamespace -%}
+          - --watch-namespace={{WatchNamespace}}
+          {% endif -%}
+          - --v=2
+        env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+        ports:
+        - name: http
+          containerPort: 80
+        - name: https
+          containerPort: 443
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: 10254
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: 10254
+            scheme: HTTP
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        securityContext:
+          capabilities:
+              drop:
+              - ALL
+              add:
+              - NET_BIND_SERVICE
+          runAsUser: 33
+        volumeMounts:
+        - name: localtime
+          mountPath: /etc/localtime
+          readOnly: true
+      nodeSelector:
+        beta.kubernetes.io/os: linux
+      volumes:
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+            type: File
